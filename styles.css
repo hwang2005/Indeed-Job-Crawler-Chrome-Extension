@@ -33,6 +33,12 @@
 #indeed-start-btn { background: #4CAF50; color: white; }
 #indeed-stop-btn { background: #ff4444; color: white; }
 #indeed-reset-btn { background: #999; color: white; }
+#indeed-csv-btn { background: #2196F3; color: white; }
+
+#indeed-crawler-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 #indeed-crawler-status {
   padding: 6px;

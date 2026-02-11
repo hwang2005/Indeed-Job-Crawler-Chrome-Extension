@@ -5,6 +5,7 @@ let currentPage = 1;
 let allJobs = [];
 let maxPages = 5; // crawl tối đa 5 trang
 let hasExported = false;
+let resumeFromIndex = 0; // index of the card to resume from after a 404 recovery
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -12,6 +13,86 @@ function wait(ms) {
 
 function log(...args) {
   console.log("[Indeed Crawler]", ...args);
+}
+
+function isPageNotFound() {
+  const title = document.title.toLowerCase();
+  const bodyText = (document.body?.innerText || '').toLowerCase().slice(0, 3000);
+  const combined = title + ' ' + bodyText;
+
+  // Multi-language "page not found" / 404 phrases for Indeed's international sites
+  const notFoundPhrases = [
+    // Universal
+    '404',
+    // English
+    'page not found', 'not found', 'the page you requested cannot be found',
+    'this page could not be found', "we can't find that page",
+    // French (fr.indeed.com, ca.indeed.com)
+    'page introuvable', 'page non trouvée', 'cette page est introuvable',
+    // German (de.indeed.com, at.indeed.com, ch.indeed.com)
+    'seite nicht gefunden', 'seite wurde nicht gefunden',
+    // Spanish (es.indeed.com, mx.indeed.com, ar.indeed.com)
+    'página no encontrada', 'no se encontró la página', 'no se ha encontrado la página',
+    // Portuguese (br.indeed.com, pt.indeed.com)
+    'página não encontrada', 'página não foi encontrada',
+    // Italian (it.indeed.com)
+    'pagina non trovata',
+    // Dutch (nl.indeed.com, be.indeed.com)
+    'pagina niet gevonden',
+    // Japanese (jp.indeed.com)
+    'ページが見つかりません', 'ページが見つかりませんでした',
+    // Korean (kr.indeed.com)
+    '페이지를 찾을 수 없습니다',
+    // Chinese Simplified (cn.indeed.com)
+    '页面未找到', '找不到页面', '未找到页面',
+    // Chinese Traditional (hk.indeed.com, tw.indeed.com)
+    '頁面未找到', '找不到頁面',
+    // Arabic (sa.indeed.com, ae.indeed.com)
+    'الصفحة غير موجودة', 'لم يتم العثور على الصفحة',
+    // Hindi (in.indeed.com)
+    'पेज नहीं मिला', 'पृष्ठ नहीं मिला',
+    // Polish (pl.indeed.com)
+    'nie znaleziono strony', 'strona nie została znaleziona',
+    // Swedish (se.indeed.com)
+    'sidan hittades inte',
+    // Norwegian (no.indeed.com)
+    'siden ble ikke funnet',
+    // Danish (dk.indeed.com)
+    'siden blev ikke fundet',
+    // Finnish (fi.indeed.com)
+    'sivua ei löytynyt', 'sivua ei löydy',
+    // Czech (cz.indeed.com)
+    'stránka nenalezena', 'stránka nebyla nalezena',
+    // Hungarian (hu.indeed.com)
+    'az oldal nem található',
+    // Romanian (ro.indeed.com)
+    'pagina nu a fost găsită',
+    // Turkish (tr.indeed.com)
+    'sayfa bulunamadı',
+    // Indonesian (id.indeed.com)
+    'halaman tidak ditemukan',
+    // Thai (th.indeed.com)
+    'ไม่พบหน้าเว็บ', 'ไม่พบหน้า',
+    // Vietnamese (vn.indeed.com)
+    'không tìm thấy trang', 'trang không tồn tại',
+    // Russian (ru.indeed.com)
+    'страница не найдена',
+    // Ukrainian (ua.indeed.com)
+    'сторінку не знайдено',
+  ];
+
+  // Check if any known 404 phrase appears in the title or body
+  for (const phrase of notFoundPhrases) {
+    if (combined.includes(phrase)) {
+      return true;
+    }
+  }
+
+  // Indeed-specific: check for error page DOM elements
+  if (document.querySelector('.jobsearch-ErrorPage, .errorMessage, [data-testid="error-page"]')) {
+    return true;
+  }
+  return false;
 }
 
 function createPanel() {
@@ -22,7 +103,9 @@ function createPanel() {
   panel.innerHTML = `
     <div id="indeed-crawler-controls">
       <button id="indeed-start-btn">Bắt Đầu Thu Thập</button>
+      <button id="indeed-stop-btn" disabled>Dừng Thu Thập</button>
       <button id="indeed-reset-btn">Xóa Dữ Liệu</button>
+      <button id="indeed-csv-btn" disabled>Tải CSV</button>
       <label style="margin-left: 10px;">
         Số trang tối đa:
         <input type="number" id="max-pages-input" value="${maxPages}" min="1" style="width: 50px;"/>
@@ -51,6 +134,15 @@ function createPanel() {
     startCrawl();
   };
 
+  document.getElementById("indeed-stop-btn").onclick = () => {
+    if (isCrawling) {
+      isCrawling = false;
+      chrome.storage.local.set({ isCrawling: false });
+      updateStatus("Đã dừng thu thập.");
+      updateButtonStates();
+    }
+  };
+
   document.getElementById("indeed-reset-btn").onclick = () => {
     chrome.storage.local.clear();
     allJobs = [];
@@ -59,8 +151,24 @@ function createPanel() {
     hasExported = false;
     document.querySelector("#indeed-crawler-table tbody").innerHTML = "";
     updateStatus("Đã xóa dữ liệu.");
-    document.getElementById("indeed-start-btn").disabled = false;
+    updateButtonStates();
   };
+
+  document.getElementById("indeed-csv-btn").onclick = () => {
+    if (!isCrawling && allJobs.length > 0) {
+      exportCSV();
+    }
+  };
+}
+
+function updateButtonStates() {
+  const startBtn = document.getElementById("indeed-start-btn");
+  const stopBtn = document.getElementById("indeed-stop-btn");
+  const csvBtn = document.getElementById("indeed-csv-btn");
+
+  if (startBtn) startBtn.disabled = isCrawling;
+  if (stopBtn) stopBtn.disabled = !isCrawling;
+  if (csvBtn) csvBtn.disabled = isCrawling || allJobs.length === 0;
 }
 
 function updateStatus(text) {
@@ -84,15 +192,17 @@ function appendToTable(job) {
 async function startCrawl() {
   if (isCrawling) return;
   isCrawling = true;
-  chrome.storage.local.set({ isCrawling, maxPages });
-  document.getElementById("indeed-start-btn").disabled = true;
+  hasExported = false;
+  resumeFromIndex = 0;
+  chrome.storage.local.set({ isCrawling, maxPages, resumeFromIndex: 0, pendingJob: null });
+  updateButtonStates();
   updateStatus("Bắt đầu crawl...");
   await crawlLoop();
 }
 
-async function crawlLoop() {
-  log("Crawl loop bắt đầu tại trang", currentPage);
-  const success = await crawlPage();
+async function crawlLoop(startIndex = 0) {
+  log("Crawl loop bắt đầu tại trang", currentPage, "từ card index", startIndex);
+  const success = await crawlPage(startIndex);
   if (!success && isCrawling) {
     updateStatus("Chuyển trang, sẽ tiếp tục sau reload...");
   }
@@ -115,36 +225,71 @@ async function waitForJobCards(timeout = 15000) {
   });
 }
 
-async function crawlPage() {
+async function crawlPage(startIndex = 0) {
   try {
     updateStatus(`Đang crawl trang ${currentPage}...`);
     const jobCards = await waitForJobCards();
 
-    for (let i = 0; i < jobCards.length; i++) {
+    for (let i = startIndex; i < jobCards.length; i++) {
       if (!isCrawling) return false;
 
       const card = jobCards[i];
       card.scrollIntoView({ behavior: 'smooth' });
       await wait(1000);
 
+      // Get basic info from the listing card
+      const titleEl = card.querySelector("h2.jobTitle a, h2.jobTitle span");
+      const companyEl = card.querySelector('[data-testid="company-name"], span.companyName, span.css-1h7lukg');
+      const locationEl = card.querySelector('[data-testid="text-location"], div.companyLocation');
       const titleLink = card.querySelector("h2.jobTitle a");
-      if (titleLink) titleLink.click();
-      await wait(3000);
 
-      const job = {
-        title: (document.querySelector('[data-testid="jobsearch-JobInfoHeader-title"]')?.innerText?.trim().replace(/\s*- job post\s*$/i, '') || "N/A"),
-        company: document.querySelector('[data-testid="inlineHeader-companyName"]')?.innerText?.trim() || "N/A",
-        location: document.querySelector('[data-testid="inlineHeader-companyLocation"]')?.innerText?.trim() || "N/A",
-        salary: document.querySelector('#salaryInfoAndJobType span')?.innerText?.trim() || "N/A",
+      // Build a partial job object with what we know before clicking
+      const pendingJob = {
+        title: titleEl?.innerText?.trim().replace(/\s*- job post\s*$/i, '') || "N/A",
+        company: companyEl?.innerText?.trim() || "N/A",
+        location: locationEl?.innerText?.trim() || "N/A",
+        salary: "N/A",
         link: titleLink?.href || location.href,
         page: currentPage
       };
 
+      // Save pending job + current index to storage BEFORE clicking the link.
+      // If the click navigates to a 404, we can recover using this info.
+      chrome.storage.local.set({ pendingJob, resumeFromIndex: i + 1 });
+
+      // Click the card to open the side detail panel (stays on the same page)
+      // Then try to read salary from the panel; if it fails (e.g. expired job),
+      // we just skip salary and continue
+      let salary = "N/A";
+      if (titleLink) {
+        try {
+          titleLink.click();
+          await wait(3000);
+
+          // Try to read salary from the detail side panel
+          const salaryEl = document.querySelector('#salaryInfoAndJobType span');
+          if (salaryEl && salaryEl.innerText.trim()) {
+            salary = salaryEl.innerText.trim();
+          }
+        } catch (e) {
+          log("Không thể đọc salary từ side panel, bỏ qua:", e);
+        }
+      }
+
+      const job = {
+        ...pendingJob,
+        salary: salary
+      };
 
       allJobs.push(job);
       appendToTable(job);
-      chrome.storage.local.set({ allJobs });
+      // Clear pendingJob after successful processing
+      chrome.storage.local.set({ allJobs, pendingJob: null });
     }
+
+    // Reset resumeFromIndex after finishing all cards on this page
+    resumeFromIndex = 0;
+    chrome.storage.local.set({ resumeFromIndex: 0 });
 
     if (currentPage >= maxPages) {
       updateStatus("Đã đạt giới hạn số trang.");
@@ -154,6 +299,7 @@ async function crawlPage() {
       }
       isCrawling = false;
       chrome.storage.local.set({ isCrawling: false });
+      updateButtonStates();
       return false;
     }
 
@@ -173,6 +319,7 @@ async function crawlPage() {
       }
       isCrawling = false;
       chrome.storage.local.set({ isCrawling: false });
+      updateButtonStates();
       return false;
     }
   } catch (err) {
@@ -203,31 +350,92 @@ function exportCSV() {
   chrome.runtime.sendMessage({ action: "saveToCSV", url, filename });
 }
 
-chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages"], data => {
-  if (Array.isArray(data.allJobs)) {
-    allJobs = data.allJobs;
-    data.allJobs.forEach(appendToTable);
-    updateStatus(`Khôi phục ${allJobs.length} công việc đã lưu.`);
-  }
-  if (typeof data.currentPage === "number") {
-    currentPage = data.currentPage;
-  }
-  if (typeof data.maxPages === "number") {
-    maxPages = data.maxPages;
-    const input = document.getElementById("max-pages-input");
-    if (input) input.value = maxPages;
-  }
-  if (data.isCrawling) {
-    isCrawling = true;
-    waitForJobCards(15000).then(() => {
-      crawlLoop();
-    }).catch(err => {
-      console.warn("Không thể tiếp tục vì không tìm thấy job cards:", err);
-      updateStatus("Không thể tiếp tục vì không tìm thấy job cards.");
-      isCrawling = false;
-      chrome.storage.local.set({ isCrawling: false });
-    });
-  }
-});
+// --- Initialization: detect 404 first, then create panel & resume ---
+function initialize() {
+  // Always create the panel on Indeed pages
+  createPanel();
 
-createPanel();
+  chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages", "pendingJob", "resumeFromIndex"], data => {
+    if (Array.isArray(data.allJobs)) {
+      allJobs = data.allJobs;
+      data.allJobs.forEach(appendToTable);
+      updateStatus(`Khôi phục ${allJobs.length} công việc đã lưu.`);
+    }
+    if (typeof data.currentPage === "number") {
+      currentPage = data.currentPage;
+    }
+    if (typeof data.maxPages === "number") {
+      maxPages = data.maxPages;
+      const input = document.getElementById("max-pages-input");
+      if (input) input.value = maxPages;
+    }
+    if (typeof data.resumeFromIndex === "number") {
+      resumeFromIndex = data.resumeFromIndex;
+    }
+
+    // If a "Page Not Found" is detected while crawling, handle the pending job
+    if (isPageNotFound()) {
+      if (data.isCrawling) {
+        log("Phát hiện trang 404 trong khi đang crawl...");
+
+        // Check if there's a pending job that caused this 404
+        if (data.pendingJob) {
+          const pending = data.pendingJob;
+          const alreadyExists = allJobs.some(j => j.link === pending.link);
+
+          if (alreadyExists) {
+            log("Pending job đã có trong danh sách, bỏ qua:", pending.title);
+            updateStatus(`Bỏ qua (đã thu thập): ${pending.title} – đang quay lại...`);
+          } else {
+            // Add it to the list with salary = "N/A" since we couldn't read it
+            log("Thêm pending job vào danh sách:", pending.title);
+            allJobs.push(pending);
+            appendToTable(pending);
+            updateStatus(`Đã thêm: ${pending.title} (không lấy được salary) – đang quay lại...`);
+          }
+
+          // Save updated list and clear pendingJob
+          chrome.storage.local.set({ allJobs, pendingJob: null });
+        } else {
+          updateStatus("Trang không tìm thấy – đang quay lại...");
+        }
+
+        // Go back to the search results; resumeFromIndex is already set
+        // so the crawl will skip past the card that caused the 404
+        setTimeout(() => {
+          history.back();
+        }, 1000);
+      } else {
+        updateStatus("Trang không tìm thấy (404).");
+        updateButtonStates();
+      }
+      return;
+    }
+
+    // Normal page: resume crawling if needed
+    if (data.isCrawling) {
+      isCrawling = true;
+      updateButtonStates();
+
+      const startIdx = resumeFromIndex || 0;
+      // Clear resume index since we're about to use it
+      if (startIdx > 0) {
+        log("Tiếp tục crawl từ card index", startIdx, "(sau phục hồi 404)");
+      }
+
+      waitForJobCards(15000).then(() => {
+        crawlLoop(startIdx);
+      }).catch(err => {
+        console.warn("Không thể tiếp tục vì không tìm thấy job cards:", err);
+        updateStatus("Không thể tiếp tục vì không tìm thấy job cards.");
+        isCrawling = false;
+        chrome.storage.local.set({ isCrawling: false });
+        updateButtonStates();
+      });
+    } else {
+      updateButtonStates();
+    }
+  });
+}
+
+initialize();
