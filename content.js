@@ -515,13 +515,27 @@ function exportCSV() {
     }).join(",")
   );
 
-  const csvContent = [headers.join(","), ...rows].join("\n");
-  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  // Use \r\n line endings (RFC 4180 CSV standard — works on Windows, Mac, Linux)
+  const csvContent = [headers.join(","), ...rows].join("\r\n");
+  // Prepend UTF-8 BOM so Excel on all OSes correctly interprets Unicode characters
+  const BOM = "\uFEFF";
+  const blob = new Blob([BOM + csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
 
   const jobCount = allJobs.length;
-  const pageTitle = document.title.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 30);
-  const filename = `${jobCount}_jobs_${pageTitle}.csv`;
+  // Sanitize filename: remove characters invalid on any OS
+  // Windows forbids: \ / : * ? " < > |
+  // Mac/Linux forbid: / and null byte
+  // Also collapse multiple underscores and trim leading/trailing underscores
+  const pageTitle = document.title
+    .replace(/[\\/:*?"<>|\x00]/g, '_')  // Replace OS-invalid characters
+    .replace(/[^\w\s-]/g, '_')           // Replace remaining non-alphanumeric
+    .replace(/\s+/g, '_')                // Replace whitespace
+    .replace(/_+/g, '_')                 // Collapse multiple underscores
+    .replace(/^_+|_+$/g, '')             // Trim leading/trailing underscores
+    .toLowerCase()
+    .slice(0, 50);
+  const filename = `${jobCount}_jobs_${pageTitle || 'indeed'}.csv`;
 
   chrome.runtime.sendMessage({ action: "saveToCSV", url, filename });
 }
