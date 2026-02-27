@@ -116,7 +116,7 @@ function createPanel() {
       <table id="indeed-crawler-table">
         <thead>
           <tr>
-            <th>Company</th><th>Job Title</th><th>Link</th><th>Salary</th><th>Location</th><th>Page</th>
+            <th>Company</th><th>Job Title</th><th>Link</th><th>Salary</th><th>Location</th><th>Apply Method</th><th>Page</th>
           </tr>
         </thead>
         <tbody></tbody>
@@ -184,6 +184,7 @@ function appendToTable(job) {
     <td><a href="${job.link}" target="_blank">Link</a></td>
     <td>${job.salary || "N/A"}</td>
     <td>${job.location || "N/A"}</td>
+    <td>${job.applyMethod || "N/A"}</td>
     <td>${job.page}</td>
   `;
   document.querySelector("#indeed-crawler-table tbody").appendChild(row);
@@ -249,6 +250,7 @@ async function crawlPage(startIndex = 0) {
         company: companyEl?.innerText?.trim() || "N/A",
         location: locationEl?.innerText?.trim() || "N/A",
         salary: "N/A",
+        applyMethod: "N/A",
         link: titleLink?.href || location.href,
         page: currentPage
       };
@@ -261,6 +263,7 @@ async function crawlPage(startIndex = 0) {
       // Then try to read salary from the panel; if it fails (e.g. expired job),
       // we just skip salary and continue
       let salary = "N/A";
+      let applyMethod = "N/A";
       if (titleLink) {
         try {
           titleLink.click();
@@ -271,14 +274,46 @@ async function crawlPage(startIndex = 0) {
           if (salaryEl && salaryEl.innerText.trim()) {
             salary = salaryEl.innerText.trim();
           }
+
+          // Try to read the apply method from the detail side panel
+          // Indeed uses different button elements: "Apply now" for Easy Apply,
+          // "Apply on company site" for external applications
+          const applyBtnSelectors = [
+            '.jobsearch-IndeedApplyButton-newDesign',   // Indeed Easy Apply button
+            '#indeedApplyButton',                        // Alternative Easy Apply button
+            'button[id*="indeedApply"]',                 // Variations of Easy Apply
+            '.jobsearch-ApplyButton-buttonContainer a',  // "Apply on company site" link
+            '.jobsearch-ApplyButton-buttonContainer button', // Apply button in container
+            'a[href*="apply"]',                          // Generic apply link
+            'button.css-1234',                           // Fallback CSS class
+          ];
+
+          let applyBtnEl = null;
+          for (const sel of applyBtnSelectors) {
+            applyBtnEl = document.querySelector(sel);
+            if (applyBtnEl) break;
+          }
+
+          if (applyBtnEl) {
+            const btnText = applyBtnEl.innerText?.trim().toLowerCase() || '';
+            if (btnText.includes('apply now') || btnText.includes('easily apply') || btnText.includes('ứng tuyển ngay')) {
+              applyMethod = 'Apply Now';
+            } else if (btnText.includes('company site') || btnText.includes('trang công ty') || btnText.includes('employer site')) {
+              applyMethod = 'Apply on Company Site';
+            } else if (btnText.includes('apply')) {
+              applyMethod = applyBtnEl.tagName === 'A' ? 'Apply on Company Site' : 'Apply Now';
+            }
+          }
+          log(`Apply method cho "${pendingJob.title}": ${applyMethod}`);
         } catch (e) {
-          log("Không thể đọc salary từ side panel, bỏ qua:", e);
+          log("Không thể đọc salary/apply method từ side panel, bỏ qua:", e);
         }
       }
 
       const job = {
         ...pendingJob,
-        salary: salary
+        salary: salary,
+        applyMethod: applyMethod
       };
 
       allJobs.push(job);
@@ -331,9 +366,9 @@ async function crawlPage(startIndex = 0) {
 
 function exportCSV() {
   log("Bắt đầu xuất file CSV với", allJobs.length, "job");
-  const headers = ["CompanyName", "Job Title", "Link", "Salary", "Location", "Page"];
+  const headers = ["CompanyName", "Job Title", "Link", "Salary", "Location", "Apply Method", "Page"];
   const rows = allJobs.map(j =>
-    [j.company, j.title, j.link, j.salary, j.location, j.page].map(v => {
+    [j.company, j.title, j.link, j.salary, j.location, j.applyMethod, j.page].map(v => {
       const val = (typeof v === 'string' || typeof v === 'number') ? v.toString() : '';
       return `"${val.replace(/"/g, '""')}"`;
     }).join(",")
