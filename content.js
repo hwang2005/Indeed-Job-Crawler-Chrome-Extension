@@ -15,6 +15,38 @@ function log(...args) {
   console.log("[Indeed Crawler]", ...args);
 }
 
+// Extract the stable Indeed job key (jk parameter) from a job URL.
+// This is the unique identifier for each job on Indeed, unlike the full URL
+// which contains tracking params (bb, xkcb, etc.) that change every visit.
+function extractJobKey(url) {
+  if (!url) return null;
+  try {
+    const match = url.match(/[?&]jk=([a-f0-9]+)/i)
+      || url.match(/\/viewjob\?jk=([a-f0-9]+)/i)
+      || url.match(/\/rc\/clk\?jk=([a-f0-9]+)/i);
+    return match ? match[1] : null;
+  } catch {
+    return null;
+  }
+}
+
+// Check if a job is already in allJobs. Uses the jk key for accuracy;
+// falls back to title+company+location if no key is available.
+function isJobDuplicate(newJob) {
+  const newKey = extractJobKey(newJob.link);
+  return allJobs.some(existing => {
+    // Primary: compare jk keys (most reliable)
+    if (newKey) {
+      const existingKey = extractJobKey(existing.link);
+      if (existingKey && existingKey === newKey) return true;
+    }
+    // Fallback: compare title + company + location
+    return existing.title === newJob.title
+      && existing.company === newJob.company
+      && existing.location === newJob.location;
+  });
+}
+
 function isPageNotFound() {
   const title = document.title.toLowerCase();
   const bodyText = (document.body?.innerText || '').toLowerCase().slice(0, 3000);
@@ -257,6 +289,14 @@ async function crawlPage(startIndex = 0) {
 
       // Save pending job + current index to storage BEFORE clicking the link.
       // If the click navigates to a 404, we can recover using this info.
+      // Skip this card if the job was already collected (e.g. from a
+      // previous 404 recovery that added the pending job to the list)
+      if (isJobDuplicate(pendingJob)) {
+        log(`Bỏ qua (đã thu thập): "${pendingJob.title}" tại ${pendingJob.company}`);
+        updateStatus(`Bỏ qua (đã thu thập): ${pendingJob.title}`);
+        continue;
+      }
+
       chrome.storage.local.set({ pendingJob, resumeFromIndex: i + 1 });
 
       // Click the card to open the side detail panel (stays on the same page)
@@ -275,34 +315,135 @@ async function crawlPage(startIndex = 0) {
             salary = salaryEl.innerText.trim();
           }
 
-          // Try to read the apply method from the detail side panel
-          // Indeed uses different button elements: "Apply now" for Easy Apply,
-          // "Apply on company site" for external applications
-          const applyBtnSelectors = [
-            '.jobsearch-IndeedApplyButton-newDesign',   // Indeed Easy Apply button
-            '#indeedApplyButton',                        // Alternative Easy Apply button
-            'button[id*="indeedApply"]',                 // Variations of Easy Apply
-            '.jobsearch-ApplyButton-buttonContainer a',  // "Apply on company site" link
-            '.jobsearch-ApplyButton-buttonContainer button', // Apply button in container
-            'a[href*="apply"]',                          // Generic apply link
-            'button.css-1234',                           // Fallback CSS class
+          // ── Detect apply method from the detail side panel ──
+          // Indeed uses the SAME CSS classes for both "Apply now" (Easy Apply)
+          // and "Apply on company site" buttons.  The key differences are:
+          //   • "Apply on company site" is usually an <a> with target="_blank"
+          //   • "Apply now" is usually a <button> (or <a> without target="_blank")
+          //   • The visible button text itself distinguishes the two types
+          // Strategy: scope search to the detail panel, collect ALL candidate
+          // elements, then classify using text + attributes.
+
+          // 1) Locate the detail side-panel container
+          const panelContainers = [
+            '#jobsearch-ViewjobPaneWrapper',
+            '#viewJobSSRRoot',
+            '.jobsearch-ViewJobLayout',
+            '.jobsearch-RightPane',
+            '#job_details_container',
+          ];
+          let detailPanel = null;
+          for (const sel of panelContainers) {
+            detailPanel = document.querySelector(sel);
+            if (detailPanel) break;
+          }
+          // Fall back to whole document if no specific panel found
+          const searchRoot = detailPanel || document;
+
+          // 2) Gather ALL candidate apply-button elements inside the panel
+          const applySelectors = [
+            '.jobsearch-IndeedApplyButton-newDesign',
+            '#indeedApplyButton',
+            'button[id*="indeedApply"]',
+            '.jobsearch-ApplyButton-buttonContainer a',
+            '.jobsearch-ApplyButton-buttonContainer button',
+            '.ia-IndeedApplyButton',
+            'a.jobsearch-IndeedApplyButton-newDesign',
+            'button.jobsearch-IndeedApplyButton-newDesign',
           ];
 
-          let applyBtnEl = null;
-          for (const sel of applyBtnSelectors) {
-            applyBtnEl = document.querySelector(sel);
-            if (applyBtnEl) break;
+          const candidates = [];
+          for (const sel of applySelectors) {
+            searchRoot.querySelectorAll(sel).forEach(el => candidates.push(el));
           }
 
-          if (applyBtnEl) {
-            const btnText = applyBtnEl.innerText?.trim().toLowerCase() || '';
-            if (btnText.includes('apply now') || btnText.includes('easily apply') || btnText.includes('ứng tuyển ngay')) {
-              applyMethod = 'Apply Now';
-            } else if (btnText.includes('company site') || btnText.includes('trang công ty') || btnText.includes('employer site')) {
+          // 3) Classify each candidate; prefer the most specific match
+          for (const el of candidates) {
+            const txt = (el.innerText || el.textContent || '').trim().toLowerCase();
+            const isAnchor = el.tagName === 'A';
+            const opensNewTab = el.getAttribute('target') === '_blank';
+            const hasExternalRel = /noopener|noreferrer|external/.test(el.getAttribute('rel') || '');
+
+            // ── "Apply on company site" indicators ──
+            const companySitePhrases = [
+              'company site', 'employer site', 'employer\'s site',
+              'company website', 'employer website',
+              // French
+              'site de l\'entreprise', 'site de l\'employeur',
+              // German
+              'unternehmenswebsite', 'arbeitgeberseite',
+              // Spanish
+              'sitio de la empresa',
+              // Portuguese
+              'site da empresa',
+              // Vietnamese
+              'trang công ty', 'trang nhà tuyển dụng',
+              // Japanese
+              '企業サイト', '会社サイト',
+            ];
+            if (companySitePhrases.some(p => txt.includes(p))) {
               applyMethod = 'Apply on Company Site';
-            } else if (btnText.includes('apply')) {
-              applyMethod = applyBtnEl.tagName === 'A' ? 'Apply on Company Site' : 'Apply Now';
+              break;
             }
+
+            // ── "Apply now" / Easy Apply indicators ──
+            const easyApplyPhrases = [
+              'apply now', 'easily apply', 'easy apply', 'quick apply',
+              // French
+              'postuler maintenant', 'postuler facilement',
+              // German
+              'jetzt bewerben', 'schnell bewerben',
+              // Spanish
+              'solicitar ahora', 'postularse ahora',
+              // Portuguese
+              'candidatar-se agora',
+              // Vietnamese
+              'ứng tuyển ngay', 'ứng tuyển nhanh',
+              // Japanese
+              '今すぐ応募', '簡単応募',
+            ];
+            if (easyApplyPhrases.some(p => txt.includes(p))) {
+              applyMethod = 'Apply Now';
+              break;
+            }
+
+            // ── Heuristic: the word "apply" exists but no specific phrase ──
+            if (txt.includes('apply') || txt.includes('postuler') || txt.includes('bewerben')
+              || txt.includes('ứng tuyển') || txt.includes('応募')) {
+              // Strong signal: <a target="_blank"> almost always means company site
+              if (isAnchor && (opensNewTab || hasExternalRel)) {
+                applyMethod = 'Apply on Company Site';
+              } else if (isAnchor) {
+                // Anchor without target="_blank" — check href for external domain
+                const href = el.getAttribute('href') || '';
+                const isExternal = href.startsWith('http') && !href.includes('indeed.com');
+                applyMethod = isExternal ? 'Apply on Company Site' : 'Apply Now';
+              } else {
+                // <button> elements are typically Indeed's Easy Apply
+                applyMethod = 'Apply Now';
+              }
+              break;
+            }
+          }
+
+          // 4) Fallback: check the listing card itself for the "Easily apply" badge
+          //    Indeed shows a small "Easily apply" / "ứng tuyển nhanh" tag on cards
+          //    that support Easy Apply; its absence implies company-site apply.
+          if (applyMethod === 'N/A') {
+            const easyApplyBadge = card.querySelector(
+              '.jobMetaDataGroup .ialbl, '            // "Easily apply" badge
+              + 'span.iaLabel, '                       // Alternative badge class
+              + '[data-testid="easyApply-badge"], '    // data-testid variant
+              + '.indeed-apply-badge, '                // Generic badge
+              + '.ialbl'                               // Short class
+            );
+            if (easyApplyBadge) {
+              applyMethod = 'Apply Now';
+            } else {
+              // No Easy Apply badge on the card → most likely company site
+              applyMethod = 'Apply on Company Site';
+            }
+            log(`Apply method (từ badge fallback) cho "${pendingJob.title}": ${applyMethod}`);
           }
           log(`Apply method cho "${pendingJob.title}": ${applyMethod}`);
         } catch (e) {
@@ -416,17 +557,20 @@ function initialize() {
         // Check if there's a pending job that caused this 404
         if (data.pendingJob) {
           const pending = data.pendingJob;
-          const alreadyExists = allJobs.some(j => j.link === pending.link);
 
-          if (alreadyExists) {
-            log("Pending job đã có trong danh sách, bỏ qua:", pending.title);
+          if (isJobDuplicate(pending)) {
+            // Job was already collected (e.g. from a previous crawl or
+            // a prior 404 recovery) — do NOT add it again
+            const existingKey = extractJobKey(pending.link);
+            log(`Pending job đã có trong danh sách (jk=${existingKey}), bỏ qua:`, pending.title);
             updateStatus(`Bỏ qua (đã thu thập): ${pending.title} – đang quay lại...`);
           } else {
-            // Add it to the list with salary = "N/A" since we couldn't read it
+            // Add it to the list with salary & applyMethod = "N/A" since we
+            // couldn't read the side panel before the 404
             log("Thêm pending job vào danh sách:", pending.title);
             allJobs.push(pending);
             appendToTable(pending);
-            updateStatus(`Đã thêm: ${pending.title} (không lấy được salary) – đang quay lại...`);
+            updateStatus(`Đã thêm: ${pending.title} (không lấy được salary/apply method) – đang quay lại...`);
           }
 
           // Save updated list and clear pendingJob
