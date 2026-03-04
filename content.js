@@ -30,6 +30,50 @@ function extractJobKey(url) {
   }
 }
 
+// Check whether a text string looks like an actual salary value.
+// A valid salary must contain BOTH:
+//   1. A currency indicator — either a symbol ($, €, £, ¥, ₹, ₩, ₫, ₺, ₽, ₴, ฿, RM, R$, kr, zł)
+//      or a 3-letter ISO currency code (USD, EUR, GBP, etc.)
+//   2. At least one digit
+// Examples that PASS:  "$80,000–$105,000 a year", "€3,000/month", "$47.60 an hour",
+//                       "50,000 USD", "¥500,000", "₹8,00,000 per annum"
+// Examples that FAIL:  "Full-time", "Contract", "Part-time", "Temporary"
+function looksLikeSalary(text) {
+  if (!text) return false;
+
+  const hasDigit = /\d/.test(text);
+  if (!hasDigit) return false;
+
+  // Common currency symbols (covers ~95% of world currencies)
+  const currencySymbolPattern = /[$€£¥₹₩₫₺₽₴฿]/;
+  // Multi-character currency prefixes/suffixes (e.g. RM for Malaysian Ringgit,
+  // R$ for Brazilian Real, kr for Scandinavian Krone, zł for Polish Złoty)
+  const multiCharCurrencyPattern = /\b(RM|R\$|kr|zł|Rp|Rs|CHF)\b/i;
+  // 3-letter ISO 4217 currency codes (e.g. USD, EUR, GBP, JPY, AUD, CAD, ...)
+  const isoCurrencyPattern = /\b[A-Z]{3}\b/;
+
+  if (currencySymbolPattern.test(text)) return true;
+  if (multiCharCurrencyPattern.test(text)) return true;
+
+  // For ISO codes, also require a digit nearby to avoid false positives on
+  // random 3-letter words. Since we already checked hasDigit above, just
+  // verify the ISO code exists.
+  if (isoCurrencyPattern.test(text)) {
+    // Extra guard: the 3-letter code should look like a real currency code,
+    // not a common English word. We check it's near a number.
+    const isoMatch = text.match(/\b[A-Z]{3}\b/);
+    if (isoMatch) {
+      const code = isoMatch[0];
+      // Exclude common 3-letter words that aren't currencies
+      const nonCurrencyCodes = ['THE', 'AND', 'FOR', 'PER', 'DAY', 'PAY', 'JOB', 'NEW', 'OLD', 'NOT', 'BUT', 'ALL', 'ANY', 'FEW'];
+      if (!nonCurrencyCodes.includes(code)) return true;
+    }
+  }
+
+  return false;
+}
+
+
 // Check if a job is already in allJobs. Uses the jk key for accuracy;
 // falls back to title+company+location if no key is available.
 function isJobDuplicate(newJob) {
@@ -309,10 +353,19 @@ async function crawlPage(startIndex = 0) {
           titleLink.click();
           await wait(3000);
 
-          // Try to read salary from the detail side panel
-          const salaryEl = document.querySelector('#salaryInfoAndJobType span');
-          if (salaryEl && salaryEl.innerText.trim()) {
-            salary = salaryEl.innerText.trim();
+          // Try to read salary from the detail side panel.
+          // #salaryInfoAndJobType contains multiple <span> children —
+          // some hold the actual salary (e.g. "$80,000–$105,000 a year")
+          // while others hold the job type (e.g. "Full-time", "Contract").
+          // We iterate all spans and pick the first one that looks like a
+          // real salary string (contains a currency indicator AND a digit).
+          const salarySpans = document.querySelectorAll('#salaryInfoAndJobType span');
+          for (const span of salarySpans) {
+            const text = span.innerText?.trim();
+            if (text && looksLikeSalary(text)) {
+              salary = text;
+              break;
+            }
           }
 
           // ── Detect apply method from the detail side panel ──
