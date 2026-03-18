@@ -75,6 +75,41 @@
   background: #F57C00;
 }
 
+#indeed-crawler-location-filter {
+  padding: 8px;
+  border-top: 1px solid #ccc;
+  background: #f9f9f9;
+}
+
+#indeed-crawler-location-filter label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: bold;
+  color: #333;
+}
+
+#filter-locations-input {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+#indeed-location-filter-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  background: #009688;
+  color: white;
+}
+
+#indeed-location-filter-btn:hover {
+  background: #00796B;
+}
+
 #indeed-crawler-status {
   padding: 6px;
   border-top: 1px solid #ccc;

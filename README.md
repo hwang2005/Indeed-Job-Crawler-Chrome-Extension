@@ -10,6 +10,7 @@ Một Chrome Extension giúp tự động thu thập dữ liệu việc làm t�
 * ✅ Hiển thị dữ liệu trực tiếp trên giao diện trang web Indeed dưới dạng bảng.
 * ✅ Giới hạn số trang crawl tùy chỉnh (do người dùng nhập).
 * ✅ Hỗ trợ tiếp tục crawl tự động sau khi reload trang.
+* ✅ **Lọc nâng cao**: Tùy chỉnh việc loại bỏ các job bằng từ khóa (loại bỏ theo tiêu đề) hoặc chỉ giữ lại các job thuộc khu vực/địa điểm mong muốn.
 
 ### Giao diện điều khiển
 Extension cung cấp 4 nút điều khiển:
@@ -20,6 +21,12 @@ Extension cung cấp 4 nút điều khiển:
 | 🔴 **Dừng Thu Thập** | Dừng quá trình crawl giữa chừng | Chỉ bật khi đang crawl |
 | ⚪ **Xóa Dữ Liệu** | Xóa toàn bộ dữ liệu đã thu thập | Luôn bật |
 | 🔵 **Tải CSV** | Tải file CSV về máy | Chỉ bật khi **không** đang crawl và có dữ liệu |
+
+### Lọc dữ liệu thông minh
+Extension cung cấp 2 bộ lọc chạy trực tiếp trên giao diện (hỗ trợ chọn nhiều giá trị cách nhau bằng dấu phẩy):
+* ✅ **Loại bỏ jobs chứa từ khóa:** Nhập các từ khóa muốn bỏ qua (vd: `intern, senior, manager`). Extension sẽ tự động phân loại và skip những công việc có tiêu đề chứa từ khóa này.
+* ✅ **Chỉ giữ jobs ở khu vực:** Nhập các khu vực muốn giữ lại (vd: `Remote, Houston, TX, New York`). Extension sẽ chỉ lưu các công việc có địa điểm khớp với yêu cầu của bạn.
+Lưu ý: Bạn có thể lọc trước và trong khi đang crawl, hoặc sử dụng các nút Lọc để lọc ra các job đã được thu thập ở bảng.
 
 ### Hoạt động trên mọi trang Indeed
 * ✅ Extension hoạt động trên **tất cả các trang** của Indeed (`*.indeed.com/*`), không chỉ riêng trang kết quả tìm kiếm.
@@ -70,16 +77,19 @@ Khi quá trình crawl gặp trang 404 (ví dụ: liên kết việc làm đã h�
 2. Tìm kiếm từ khóa công việc mong muốn.
 3. Giao diện **"Indeed Crawler"** sẽ hiển thị ở **góc dưới bên phải** trang.
 4. Chỉnh **số trang tối đa** nếu muốn (mặc định: 5 trang).
-5. Bấm nút **"Bắt Đầu Thu Thập"** để bắt đầu quá trình crawl.
-6. Extension sẽ tự động:
+5. Nhập các từ khóa loại trừ hoặc khu vực mong muốn vào 2 bộ lọc (nếu có).
+6. Bấm nút **"Bắt Đầu Thu Thập"** để bắt đầu quá trình crawl.
+7. Extension sẽ tự động:
    * Cuộn đến và click từng job card → lấy thông tin chi tiết (bao gồm mức lương).
+   * Tự động bỏ qua các việc làm không phù hợp theo bộ lọc trước đó.
    * Nếu gặp trang 404 → tự động phục hồi và tiếp tục.
    * Chuyển sang trang tiếp theo khi hoàn tất trang hiện tại.
    * Dừng khi hết trang hoặc đạt giới hạn số trang.
-7. Bạn có thể dùng nút **"Dừng Thu Thập"** bất cứ lúc nào để dừng giữa chừng.
-8. Khi hoàn tất, trình duyệt sẽ hiển thị cửa sổ **lưu file CSV**.
-9. Bấm nút **"Tải CSV"** để tải lại file CSV bất cứ lúc nào (lưu ý: chỉ hoạt động khi không đang crawl).
-10. Bấm nút **"Xóa Dữ Liệu"** để reset toàn bộ và bắt đầu lại từ đầu.
+8. Bạn có thể dùng nút **"Dừng Thu Thập"** bất cứ lúc nào để dừng giữa chừng.
+9. Khi hoàn tất, trình duyệt sẽ hiển thị cửa sổ **lưu file CSV**.
+10. Bấm nút **"Tải CSV"** để tải lại file CSV bất cứ lúc nào (lưu ý: chỉ hoạt động khi không đang crawl).
+11. Bấm nút **"Lọc"** hoặc **"Lọc Khu Vực"** bất cứ lúc nào để áp dụng bộ lọc trên danh sách đã thu thập.
+12. Bấm nút **"Xóa Dữ Liệu"** để reset toàn bộ và bắt đầu lại từ đầu.
 
 ---
 

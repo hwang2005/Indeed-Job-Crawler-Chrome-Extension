@@ -7,6 +7,7 @@ let maxPages = 5; // crawl tối đa 5 trang
 let hasExported = false;
 let resumeFromIndex = 0; // index of the card to resume from after a 404 recovery
 let filterKeywords = []; // comma-separated keywords to auto-remove jobs by title
+let filterLocations = []; // comma-separated locations to keep (location-only mode)
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -98,6 +99,16 @@ function shouldRemoveJob(jobTitle) {
   if (!filterKeywords.length || !jobTitle) return false;
   const lowerTitle = jobTitle.toLowerCase();
   return filterKeywords.some(kw => lowerTitle.includes(kw));
+}
+
+// Check if a job's location matches any of the user's allowed locations.
+// Returns true if the job should be KEPT (i.e., location contains an allowed area).
+// If no locations are specified, all jobs are kept.
+function shouldKeepByLocation(jobLocation) {
+  if (!filterLocations.length) return true; // no filter → keep all
+  if (!jobLocation || jobLocation === "N/A") return false;
+  const lowerLoc = jobLocation.toLowerCase();
+  return filterLocations.some(loc => lowerLoc.includes(loc));
 }
 
 // Re-render the table from allJobs (used after filtering)
@@ -221,6 +232,15 @@ function createPanel() {
         <button id="indeed-filter-btn">Lọc</button>
       </div>
     </div>
+    <div id="indeed-crawler-location-filter">
+      <label>
+        Chỉ giữ jobs ở khu vực (cách nhau bằng dấu phẩy):
+      </label>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <input type="text" id="filter-locations-input" placeholder="vd: Remote, Houston, TX, New York" value="${filterLocations.join(', ')}" />
+        <button id="indeed-location-filter-btn">Lọc Khu Vực</button>
+      </div>
+    </div>
     <div id="indeed-crawler-status">Chưa bắt đầu.</div>
     <div id="indeed-crawler-table-wrapper">
       <table id="indeed-crawler-table">
@@ -287,6 +307,26 @@ function createPanel() {
     chrome.storage.local.set({ allJobs });
     rebuildTable();
     updateStatus(`Đã loại bỏ ${removed} job(s) chứa từ khóa: ${filterKeywords.join(", ")}. Còn lại ${allJobs.length} jobs.`);
+    updateButtonStates();
+  };
+
+  // Location filter button: keep only jobs in specified locations, and re-render
+  document.getElementById("indeed-location-filter-btn").onclick = () => {
+    const input = document.getElementById("filter-locations-input").value;
+    filterLocations = parseKeywords(input);
+    chrome.storage.local.set({ filterLocations: input });
+
+    if (filterLocations.length === 0) {
+      updateStatus("Không có khu vực lọc. Dữ liệu giữ nguyên.");
+      return;
+    }
+
+    const before = allJobs.length;
+    allJobs = allJobs.filter(job => shouldKeepByLocation(job.location));
+    const removed = before - allJobs.length;
+    chrome.storage.local.set({ allJobs });
+    rebuildTable();
+    updateStatus(`Đã loại bỏ ${removed} job(s) ngoài khu vực: ${filterLocations.join(", ")}. Còn lại ${allJobs.length} jobs.`);
     updateButtonStates();
   };
 }
@@ -399,6 +439,13 @@ async function crawlPage(startIndex = 0) {
       if (shouldRemoveJob(pendingJob.title)) {
         log(`Bỏ qua (từ khóa lọc): "${pendingJob.title}"`);
         updateStatus(`Bỏ qua (từ khóa lọc): ${pendingJob.title}`);
+        continue;
+      }
+
+      // Location-only: skip jobs not in specified locations
+      if (!shouldKeepByLocation(pendingJob.location)) {
+        log(`Bỏ qua (ngoài khu vực): "${pendingJob.title}" tại ${pendingJob.location}`);
+        updateStatus(`Bỏ qua (ngoài khu vực): ${pendingJob.title} – ${pendingJob.location}`);
         continue;
       }
 
@@ -659,12 +706,19 @@ function initialize() {
   // Always create the panel on Indeed pages
   createPanel();
 
-  chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages", "pendingJob", "resumeFromIndex", "filterKeywords"], data => {
+  chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages", "pendingJob", "resumeFromIndex", "filterKeywords", "filterLocations"], data => {
     // Restore filter keywords first so they are available during crawl resume
     if (typeof data.filterKeywords === "string" && data.filterKeywords.trim()) {
       filterKeywords = parseKeywords(data.filterKeywords);
       const kwInput = document.getElementById("filter-keywords-input");
       if (kwInput) kwInput.value = data.filterKeywords;
+    }
+
+    // Restore location filter so it is available during crawl resume
+    if (typeof data.filterLocations === "string" && data.filterLocations.trim()) {
+      filterLocations = parseKeywords(data.filterLocations);
+      const locInput = document.getElementById("filter-locations-input");
+      if (locInput) locInput.value = data.filterLocations;
     }
 
     if (Array.isArray(data.allJobs)) {
