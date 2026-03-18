@@ -40,6 +40,41 @@
   cursor: not-allowed;
 }
 
+#indeed-crawler-filter {
+  padding: 8px;
+  border-top: 1px solid #ccc;
+  background: #f9f9f9;
+}
+
+#indeed-crawler-filter label {
+  display: block;
+  margin-bottom: 4px;
+  font-weight: bold;
+  color: #333;
+}
+
+#filter-keywords-input {
+  flex: 1;
+  padding: 4px 6px;
+  border: 1px solid #ccc;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+#indeed-filter-btn {
+  padding: 4px 10px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  background: #FF9800;
+  color: white;
+}
+
+#indeed-filter-btn:hover {
+  background: #F57C00;
+}
+
 #indeed-crawler-status {
   padding: 6px;
   border-top: 1px solid #ccc;

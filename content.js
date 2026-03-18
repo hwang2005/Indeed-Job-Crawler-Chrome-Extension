@@ -6,6 +6,7 @@ let allJobs = [];
 let maxPages = 5; // crawl tối đa 5 trang
 let hasExported = false;
 let resumeFromIndex = 0; // index of the card to resume from after a 404 recovery
+let filterKeywords = []; // comma-separated keywords to auto-remove jobs by title
 
 function wait(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -89,6 +90,30 @@ function isJobDuplicate(newJob) {
       && existing.company === newJob.company
       && existing.location === newJob.location;
   });
+}
+
+// Check if a job title matches any of the user's filter keywords.
+// Returns true if the job should be REMOVED (i.e., title contains a keyword).
+function shouldRemoveJob(jobTitle) {
+  if (!filterKeywords.length || !jobTitle) return false;
+  const lowerTitle = jobTitle.toLowerCase();
+  return filterKeywords.some(kw => lowerTitle.includes(kw));
+}
+
+// Re-render the table from allJobs (used after filtering)
+function rebuildTable() {
+  const tbody = document.querySelector("#indeed-crawler-table tbody");
+  if (!tbody) return;
+  tbody.innerHTML = "";
+  allJobs.forEach(job => appendToTable(job));
+}
+
+// Parse the keyword input string into a trimmed, lowercased array
+function parseKeywords(input) {
+  if (!input || !input.trim()) return [];
+  return input.split(",")
+    .map(kw => kw.trim().toLowerCase())
+    .filter(kw => kw.length > 0);
 }
 
 function isPageNotFound() {
@@ -187,6 +212,15 @@ function createPanel() {
         <input type="number" id="max-pages-input" value="${maxPages}" min="1" style="width: 50px;"/>
       </label>
     </div>
+    <div id="indeed-crawler-filter">
+      <label>
+        Loại bỏ jobs chứa từ khóa (cách nhau bằng dấu phẩy):
+      </label>
+      <div style="display: flex; gap: 6px; align-items: center;">
+        <input type="text" id="filter-keywords-input" placeholder="vd: intern, senior, manager" value="${filterKeywords.join(', ')}" />
+        <button id="indeed-filter-btn">Lọc</button>
+      </div>
+    </div>
     <div id="indeed-crawler-status">Chưa bắt đầu.</div>
     <div id="indeed-crawler-table-wrapper">
       <table id="indeed-crawler-table">
@@ -234,6 +268,26 @@ function createPanel() {
     if (!isCrawling && allJobs.length > 0) {
       exportCSV();
     }
+  };
+
+  // Filter button: parse keywords, remove matching jobs, and re-render
+  document.getElementById("indeed-filter-btn").onclick = () => {
+    const input = document.getElementById("filter-keywords-input").value;
+    filterKeywords = parseKeywords(input);
+    chrome.storage.local.set({ filterKeywords: input });
+
+    if (filterKeywords.length === 0) {
+      updateStatus("Không có từ khóa lọc. Dữ liệu giữ nguyên.");
+      return;
+    }
+
+    const before = allJobs.length;
+    allJobs = allJobs.filter(job => !shouldRemoveJob(job.title));
+    const removed = before - allJobs.length;
+    chrome.storage.local.set({ allJobs });
+    rebuildTable();
+    updateStatus(`Đã loại bỏ ${removed} job(s) chứa từ khóa: ${filterKeywords.join(", ")}. Còn lại ${allJobs.length} jobs.`);
+    updateButtonStates();
   };
 }
 
@@ -338,6 +392,13 @@ async function crawlPage(startIndex = 0) {
       if (isJobDuplicate(pendingJob)) {
         log(`Bỏ qua (đã thu thập): "${pendingJob.title}" tại ${pendingJob.company}`);
         updateStatus(`Bỏ qua (đã thu thập): ${pendingJob.title}`);
+        continue;
+      }
+
+      // Auto-remove: skip jobs whose title matches any filter keyword
+      if (shouldRemoveJob(pendingJob.title)) {
+        log(`Bỏ qua (từ khóa lọc): "${pendingJob.title}"`);
+        updateStatus(`Bỏ qua (từ khóa lọc): ${pendingJob.title}`);
         continue;
       }
 
@@ -598,7 +659,14 @@ function initialize() {
   // Always create the panel on Indeed pages
   createPanel();
 
-  chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages", "pendingJob", "resumeFromIndex"], data => {
+  chrome.storage.local.get(["allJobs", "currentPage", "isCrawling", "maxPages", "pendingJob", "resumeFromIndex", "filterKeywords"], data => {
+    // Restore filter keywords first so they are available during crawl resume
+    if (typeof data.filterKeywords === "string" && data.filterKeywords.trim()) {
+      filterKeywords = parseKeywords(data.filterKeywords);
+      const kwInput = document.getElementById("filter-keywords-input");
+      if (kwInput) kwInput.value = data.filterKeywords;
+    }
+
     if (Array.isArray(data.allJobs)) {
       allJobs = data.allJobs;
       data.allJobs.forEach(appendToTable);
